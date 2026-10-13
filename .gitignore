@@ -1,0 +1,32 @@
+# Secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# PHP
+**/vendor/
+
+# Node
+**/node_modules/
+**/dist/
+
+# CodeIgniter runtime
+**/writable/cache/*
+**/writable/logs/*
+**/writable/session/*
+
+# Laravel runtime
+**/storage/logs/*
+**/storage/framework/cache/*
+**/storage/framework/sessions/*
+**/storage/framework/views/*
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Temporary
+*.tmp
+*.log
