@@ -61,7 +61,8 @@ Arsitektur utama:
 - Landing page publik.
 - Login dan akses berbasis peran.
 - Pengelolaan akun oleh Staf Unit Logistik dan Laboratorium.
-- Pengelolaan aset.
+- Pengelolaan aset per unit fisik dengan ID unik.
+- Input aset secara satuan maupun bulk dengan ID batch input yang unik.
 - Peminjaman fasilitas.
 - F01 sebagai dokumen unggahan.
 - Form digital pengganti F02 manual.
@@ -238,23 +239,51 @@ Tidak ada pricing dan tidak ada self-registration publik.
 
 ### 7.2 Asset Management
 
-Data minimum:
-- kode;
+Setiap baris pada domain aset merepresentasikan **satu unit aset fisik**, bukan agregasi jumlah. Setiap aset menggunakan kolom `id` bertipe UUID sebagai primary key dan sekaligus ID unik aset. UUID dibuat otomatis oleh PostgreSQL menggunakan `gen_random_uuid()` dan tidak diinput maupun diedit oleh pengguna.
+
+Setiap proses penambahan aset, baik satuan maupun bulk, membentuk satu **batch input**. Batch juga menggunakan kolom `id` bertipe UUID sebagai ID Batch. Apabila satu batch berisi 10 aset, sistem membuat satu record `asset_batches` dan 10 record `assets`. Kesepuluh aset memiliki UUID yang berbeda, tetapi seluruhnya mengacu pada `batch_id` yang sama.
+
+Data minimum aset:
+- `id` sebagai UUID unik aset;
+- `batch_id` sebagai referensi ke batch input;
 - nama;
 - kategori;
 - lokasi;
-- jumlah;
 - kondisi;
 - status ketersediaan;
 - catatan;
+- timestamp;
+- pengguna yang membuat atau memperbarui data.
+
+Data minimum batch:
+- `id` sebagai UUID unik batch;
+- metode input (`SINGLE` atau `BULK_FORM`);
+- catatan batch;
+- pengguna pembuat;
 - timestamp.
 
 Fitur:
 - list/search/filter/sort;
-- detail;
-- tambah/edit;
-- riwayat;
-- cek ketersediaan pada periode tertentu.
+- pencarian berdasarkan ID Aset, ID Batch, nama aset, kategori, dan lokasi;
+- detail aset;
+- detail batch dan daftar aset di dalam batch;
+- tambah aset satuan;
+- tambah aset secara bulk;
+- edit atribut aset yang diperbolehkan;
+- riwayat perubahan kondisi, lokasi, dan status aset;
+- cek ketersediaan aset pada periode tertentu.
+
+Business rules:
+- UUID aset dan UUID batch dibuat otomatis oleh database;
+- UUID tidak dapat diedit melalui fungsi aplikasi;
+- setiap aset wajib terhubung ke tepat satu batch input;
+- satu batch dapat berisi satu atau lebih aset;
+- penambahan satu aset tetap membentuk satu batch dengan metode `SINGLE`;
+- penambahan bulk membentuk satu batch dengan metode `BULK_FORM`;
+- proses bulk harus bersifat atomik, sehingga seluruh aset dalam batch disimpan bersama atau seluruh transaksi dibatalkan apabila terdapat kesalahan;
+- jumlah aset dihitung dari jumlah record aset, bukan dari kolom agregat jumlah;
+- `batch_id` merepresentasikan asal transaksi input aset dan tidak dapat dipindahkan setelah aset terbentuk;
+- perubahan kondisi, lokasi, atau status ketersediaan dicatat pada riwayat aset.
 
 ### 7.3 Borrowing
 
@@ -500,7 +529,7 @@ Audit minimum:
 - notes;
 - correlation/request ID jika tersedia.
 
-Wajib untuk submit, resubmit, SSC, approval, partial approval, replacement, QR, handover, return, dan asset status change.
+Wajib untuk submit, resubmit, SSC, approval, partial approval, replacement, QR, handover, return, pembuatan batch aset, pembuatan aset, dan perubahan status aset.
 
 ## 10. Arsitektur Teknis
 
@@ -565,11 +594,16 @@ Prefix: `/api/v1`
 ### Asset
 - `GET /assets`
 - `POST /assets`
+- `POST /assets/bulk`
 - `GET /assets/{id}`
 - `PATCH /assets/{id}`
 - `GET /assets/{id}/history`
 - `GET /assets/availability`
 - `PATCH /assets/{id}/status`
+- `GET /asset-batches`
+- `GET /asset-batches/{id}`
+
+`POST /assets` membuat satu batch berisi satu aset. `POST /assets/bulk` membuat satu batch dan beberapa aset individual secara atomik dalam satu transaksi. Response pembuatan bulk minimal mengembalikan `batch_id`, jumlah aset yang berhasil dibuat, dan daftar UUID aset pada field `id`.
 
 ### Borrowing
 - `GET /borrowings`
@@ -664,8 +698,11 @@ Jangan mengandalkan hide/show menu saja.
 - `role_permissions`
 
 ### Asset
+- `asset_batches`
 - `assets`
 - `asset_status_history`
+
+`asset_batches` menyimpan identitas dan metadata transaksi input aset. `assets` menyimpan satu record untuk setiap unit aset fisik dan memiliki foreign key ke `asset_batches`. `asset_status_history` menyimpan riwayat perubahan kondisi, lokasi, dan status ketersediaan setiap aset.
 
 ### Borrowing
 - `borrowing_requests`
@@ -822,6 +859,8 @@ List besar wajib menyediakan:
 - empty state;
 - error state.
 
+Pada modul aset, search minimal mendukung UUID aset, UUID batch, nama aset, kategori, dan lokasi. Filter batch dapat digunakan untuk menampilkan seluruh aset yang berasal dari satu transaksi input. Pada UI, UUID dapat ditampilkan secara ringkas, tetapi pencarian dan salin ID tetap menggunakan nilai UUID lengkap.
+
 Filter tidak boleh memperluas akses role.
 
 ## 18. F02/F03 Generation
@@ -938,29 +977,35 @@ Detail ada di `design.md`.
 ## 23. Acceptance Criteria Produk
 
 Baseline dinyatakan terpenuhi jika:
-1. role/access benar;
-2. Guest hanya publik;
-3. pengajuan F01 + form digital bekerja;
-4. ticket otomatis;
-5. SSC return/forward tanpa approval;
-6. Logistik hanya setelah SSC;
-7. partial/replacement tercatat;
-8. Kemahasiswaan setelah Logistik;
-9. QR hanya final approval;
-10. QR dapat divalidasi;
-11. F01 dapat ditampilkan;
-12. F02/F03 generated on demand;
-13. handover/return update aset;
-14. budget tidak mengubah aset;
-15. schedule menjadi dasar presensi;
-16. presensi memeriksa waktu/lokasi/foto;
-17. BAP terkait presensi;
-18. honorarium dari data valid dan tarif periode;
-19. notification async;
-20. audit tersedia;
-21. report dibatasi role;
-22. light/dark bekerja;
-23. flow utama desktop/mobile dapat diselesaikan.
+1. role dan hak akses bekerja sesuai kewenangan;
+2. setiap unit aset fisik disimpan sebagai satu record aset dengan UUID unik;
+3. setiap transaksi input aset memiliki satu record batch dengan UUID unik;
+4. input satuan membuat satu batch `SINGLE` yang berisi satu aset;
+5. input bulk membuat satu batch `BULK_FORM` dan beberapa record aset secara atomik;
+6. seluruh aset hasil bulk dapat ditelusuri melalui `batch_id` yang sama;
+7. UUID aset, UUID batch, dan hubungan `batch_id` tidak dapat diubah melalui fungsi aplikasi;
+8. Guest hanya dapat mengakses halaman publik;
+9. pengajuan F01 dan form digital dapat dikirim;
+10. nomor tiket dibuat otomatis;
+11. SSC dapat mengembalikan atau meneruskan pengajuan tanpa menjadi approval tier;
+12. Logistik hanya memproses pengajuan yang telah lolos verifikasi SSC;
+13. partial approval dan replacement item tercatat;
+14. Kemahasiswaan hanya memproses pengajuan setelah keputusan Logistik;
+15. QR hanya diterbitkan setelah final approval;
+16. QR dapat divalidasi oleh Logistik;
+17. F01 dapat ditampilkan kembali;
+18. F02 dan F03 generated on demand;
+19. handover dan return memperbarui kondisi atau status aset sesuai business rule;
+20. pencatatan anggaran tidak otomatis mengubah data aset;
+21. jadwal menjadi dasar validasi presensi;
+22. presensi memeriksa waktu, lokasi, dan foto;
+23. BAP dapat dihubungkan dengan presensi;
+24. honorarium menggunakan data tervalidasi dan tarif periode;
+25. notifikasi asinkron bekerja sesuai event;
+26. audit trail tersedia untuk perubahan penting;
+27. laporan dibatasi berdasarkan hak akses;
+28. light dan dark mode tidak mengubah fungsi;
+29. flow utama dapat diselesaikan pada desktop dan mobile.
 
 ## 24. Testing Alignment
 
@@ -983,7 +1028,7 @@ Peran:
 
 ## 25. Development Iterations
 
-- Iterasi 1: US-01, US-02. Auth, permission, aset.
+- Iterasi 1: US-01, US-02. Auth, permission, aset per unit, UUID aset, batch input berbasis UUID, dan bulk asset creation.
 - Iterasi 2: US-03, US-04, US-05. F01, form, ticket, status, SSC.
 - Iterasi 3: US-06 sampai US-12. Approval, QR, handover, return, notification.
 - Iterasi 4: US-13. Anggaran.

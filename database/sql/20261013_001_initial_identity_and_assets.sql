@@ -230,16 +230,28 @@ FOR EACH ROW EXECUTE FUNCTION public.sync_auth_user_profile();
 -- Asset domain
 -- ============================================================
 
+CREATE TABLE IF NOT EXISTS public.asset_batches (
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    input_method  varchar(30) NOT NULL DEFAULT 'SINGLE'
+                  CHECK (input_method IN ('SINGLE', 'BULK_FORM')),
+    notes         text,
+    created_by    uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_asset_batches_created_at
+    ON public.asset_batches(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_asset_batches_created_by
+    ON public.asset_batches(created_by);
+
 CREATE TABLE IF NOT EXISTS public.assets (
     id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    asset_code          varchar(100) NOT NULL UNIQUE,
+    batch_id            uuid NOT NULL
+                        REFERENCES public.asset_batches(id) ON DELETE RESTRICT,
     name                varchar(200) NOT NULL,
     category            varchar(120) NOT NULL,
     location            varchar(200),
-    quantity_total      integer NOT NULL DEFAULT 1
-                        CHECK (quantity_total >= 0),
-    quantity_available  integer NOT NULL DEFAULT 1
-                        CHECK (quantity_available >= 0),
     condition           varchar(40) NOT NULL DEFAULT 'BAIK'
                         CHECK (
                             condition IN (
@@ -253,7 +265,6 @@ CREATE TABLE IF NOT EXISTS public.assets (
                         CHECK (
                             availability_status IN (
                                 'TERSEDIA',
-                                'DIPINJAM_SEBAGIAN',
                                 'DIPINJAM',
                                 'TIDAK_TERSEDIA',
                                 'PERLU_PEMERIKSAAN'
@@ -263,10 +274,11 @@ CREATE TABLE IF NOT EXISTS public.assets (
     created_by          uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
     updated_by          uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
     created_at          timestamptz NOT NULL DEFAULT now(),
-    updated_at          timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT chk_assets_available_not_over_total
-        CHECK (quantity_available <= quantity_total)
+    updated_at          timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS idx_assets_batch_id
+    ON public.assets(batch_id);
 
 CREATE INDEX IF NOT EXISTS idx_assets_name
     ON public.assets(name);
@@ -289,8 +301,6 @@ CREATE TABLE IF NOT EXISTS public.asset_status_history (
     new_status            varchar(40),
     previous_location     varchar(200),
     new_location          varchar(200),
-    previous_available    integer,
-    new_available         integer,
     notes                 text,
     changed_by            uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
     created_at            timestamptz NOT NULL DEFAULT now()
@@ -303,6 +313,25 @@ DROP TRIGGER IF EXISTS trg_assets_set_updated_at ON public.assets;
 CREATE TRIGGER trg_assets_set_updated_at
 BEFORE UPDATE ON public.assets
 FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+-- Batch membership represents the original input transaction and must not change.
+CREATE OR REPLACE FUNCTION public.prevent_asset_batch_change()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.batch_id IS DISTINCT FROM OLD.batch_id THEN
+        RAISE EXCEPTION 'asset batch membership is immutable';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_assets_prevent_batch_change ON public.assets;
+CREATE TRIGGER trg_assets_prevent_batch_change
+BEFORE UPDATE ON public.assets
+FOR EACH ROW EXECUTE FUNCTION public.prevent_asset_batch_change();
 
 CREATE OR REPLACE FUNCTION public.record_asset_change()
 RETURNS trigger
@@ -317,7 +346,6 @@ BEGIN
             new_condition,
             new_status,
             new_location,
-            new_available,
             notes,
             changed_by
         )
@@ -326,7 +354,6 @@ BEGIN
             NEW.condition,
             NEW.availability_status,
             NEW.location,
-            NEW.quantity_available,
             'Initial asset record',
             NEW.created_by
         );
@@ -338,7 +365,6 @@ BEGIN
         OLD.condition IS DISTINCT FROM NEW.condition
         OR OLD.availability_status IS DISTINCT FROM NEW.availability_status
         OR OLD.location IS DISTINCT FROM NEW.location
-        OR OLD.quantity_available IS DISTINCT FROM NEW.quantity_available
     THEN
         INSERT INTO public.asset_status_history (
             asset_id,
@@ -348,8 +374,6 @@ BEGIN
             new_status,
             previous_location,
             new_location,
-            previous_available,
-            new_available,
             notes,
             changed_by
         )
@@ -361,8 +385,6 @@ BEGIN
             NEW.availability_status,
             OLD.location,
             NEW.location,
-            OLD.quantity_available,
-            NEW.quantity_available,
             'Asset operational state changed',
             NEW.updated_by
         );
@@ -434,6 +456,7 @@ ALTER TABLE public.roles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.role_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.asset_batches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.assets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.asset_status_history ENABLE ROW LEVEL SECURITY;
 
@@ -472,6 +495,28 @@ FOR UPDATE
 TO authenticated
 USING (public.current_user_has_permission('users.manage'))
 WITH CHECK (public.current_user_has_permission('users.manage'));
+
+DROP POLICY IF EXISTS asset_batches_read_authenticated ON public.asset_batches;
+CREATE POLICY asset_batches_read_authenticated
+ON public.asset_batches
+FOR SELECT
+TO authenticated
+USING (true);
+
+DROP POLICY IF EXISTS asset_batches_logistics_insert ON public.asset_batches;
+CREATE POLICY asset_batches_logistics_insert
+ON public.asset_batches
+FOR INSERT
+TO authenticated
+WITH CHECK (public.current_user_has_permission('assets.create'));
+
+DROP POLICY IF EXISTS asset_batches_logistics_update ON public.asset_batches;
+CREATE POLICY asset_batches_logistics_update
+ON public.asset_batches
+FOR UPDATE
+TO authenticated
+USING (public.current_user_has_permission('assets.update'))
+WITH CHECK (public.current_user_has_permission('assets.update'));
 
 DROP POLICY IF EXISTS assets_read_authenticated ON public.assets;
 CREATE POLICY assets_read_authenticated
@@ -529,7 +574,16 @@ COMMIT;
 --       'permissions',
 --       'role_permissions',
 --       'profiles',
+--       'asset_batches',
 --       'assets',
 --       'asset_status_history'
 --   )
 -- ORDER BY tablename;
+
+
+-- Asset batch verification example:
+-- SELECT b.id AS batch_id, COUNT(a.id) AS asset_count
+-- FROM public.asset_batches b
+-- LEFT JOIN public.assets a ON a.batch_id = b.id
+-- GROUP BY b.id
+-- ORDER BY b.created_at DESC;

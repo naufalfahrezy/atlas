@@ -612,8 +612,15 @@ QR invalid menggunakan Section Message danger, bukan hanya modal generik.
 
 ## 29. Asset UI
 
-List:
-- kode;
+Setiap unit aset ditampilkan sebagai record individual. **ID Aset** menggunakan UUID pada kolom `assets.id`, sedangkan **ID Batch** menggunakan UUID pada kolom `asset_batches.id`. Pengguna tidak membuat maupun mengedit kedua ID tersebut. Sistem membuat UUID otomatis saat data berhasil disimpan.
+
+UUID lengkap dapat ditampilkan pada halaman detail dan tersedia melalui aksi `Copy`. Pada tabel desktop atau mobile, UUID boleh ditampilkan dalam bentuk ringkas, misalnya `74bf6312…`, untuk menjaga keterbacaan. Nilai asli yang disalin tetap UUID lengkap.
+
+### 29.1 Asset List
+
+Kolom desktop:
+- ID Aset;
+- ID Batch;
 - nama;
 - kategori;
 - lokasi;
@@ -622,14 +629,87 @@ List:
 - updated;
 - action.
 
-Detail:
-- summary;
-- status;
-- location;
-- history;
-- borrowing reference.
+ID Aset menjadi identifier teknis utama pada setiap baris. ID Batch dapat ditampilkan sebagai link menuju halaman detail batch. Sediakan search berdasarkan UUID aset, UUID batch, nama, kategori, dan lokasi.
 
-Gunakan Lozenge untuk status.
+Pada mobile, prioritaskan:
+- ID Aset ringkas;
+- nama;
+- status;
+- lokasi.
+
+ID Batch dan metadata tambahan dapat dipindahkan ke detail page atau expandable row.
+
+### 29.2 Add Asset
+
+Halaman tambah aset memiliki dua mode:
+- **Satuan**, untuk membuat satu aset;
+- **Bulk**, untuk membuat beberapa aset dalam satu batch.
+
+Pada mode satuan, sistem tetap membuat satu batch dengan metode `SINGLE` yang berisi satu aset sehingga seluruh aset memiliki jejak sumber input yang konsisten.
+
+### 29.3 Bulk Asset Input
+
+Gunakan pola tiga tahap:
+1. **Informasi Batch**, berisi catatan batch dan nilai default yang dapat diterapkan ke item;
+2. **Daftar Aset**, berupa editable table/grid untuk menambahkan beberapa unit aset;
+3. **Review & Create**, menampilkan ringkasan sebelum transaksi disimpan.
+
+Kolom editable minimum pada bulk grid:
+- nama;
+- kategori;
+- lokasi;
+- kondisi;
+- catatan.
+
+ID Aset dan ID Batch tidak ditampilkan sebagai input field karena UUID dibuat otomatis oleh database setelah proses berhasil.
+
+Aksi minimum:
+- Tambah baris;
+- Duplikasi baris;
+- Hapus baris;
+- Terapkan nilai default ke semua baris bila relevan;
+- Review;
+- Simpan Batch.
+
+Apabila satu batch berisi beberapa aset dengan atribut yang sama, aksi `Duplikasi Baris` dapat digunakan untuk mempercepat input tanpa menyimpan jumlah sebagai agregat. Setiap baris tetap menghasilkan satu record aset dengan UUID tersendiri.
+
+Setelah berhasil, tampilkan success summary:
+- ID Batch;
+- jumlah aset dibuat;
+- daftar ID Aset;
+- aksi `Copy ID`;
+- aksi `Lihat Batch`;
+- aksi `Tambah Batch Baru`.
+
+Gunakan transaction feedback yang jelas. Jika satu item gagal tervalidasi, batch tidak boleh ditampilkan sebagai berhasil sebagian.
+
+### 29.4 Batch Detail
+
+Tampilkan:
+- ID Batch UUID;
+- waktu input;
+- pembuat;
+- metode input;
+- catatan;
+- jumlah aset;
+- tabel seluruh aset di dalam batch.
+
+Sediakan tombol copy untuk ID Batch dan setiap ID Aset. Gunakan font monospace untuk UUID apabila konsisten dengan foundation typography.
+
+### 29.5 Asset Detail
+
+Tampilkan:
+- ID Aset UUID;
+- ID Batch UUID;
+- nama;
+- kategori;
+- status;
+- lokasi;
+- kondisi;
+- riwayat;
+- referensi peminjaman bila tersedia.
+
+ID Aset dan ID Batch bersifat read-only. Gunakan Lozenge untuk status dan jangan mengandalkan warna saja.
 
 ## 30. Budget UI
 
@@ -878,6 +958,8 @@ Siap mengakses ATLAS?
 - Users
 - User Detail
 - Assets
+- Asset Bulk Input
+- Asset Batch Detail
 - Asset Detail
 - Approval Queue
 - Logistics Approval Detail
@@ -914,6 +996,8 @@ Siap mengakses ATLAS?
 | Login | Form, Text Field, Button, Inline Message |
 | Dashboard | Page Header, Lozenge, Dynamic Table, Empty State |
 | Asset list | Dynamic Table, Filters, Pagination |
+| Asset bulk input | Form, Dynamic Table, Progress Tracker, Section Message |
+| Asset batch detail | Page Header, Dynamic Table, Tag/Lozenge |
 | Borrowing detail | Page Header, Progress Tracker, Tabs, Lozenge |
 | SSC verify | Form, Section Message, Buttons, Panel |
 | Logistics approval | Table, Select, Text Field, Lozenge |
